@@ -12,7 +12,6 @@ Switch hardening controls on and off for a ChirpStack v4 back-end, fire 12 attac
 
 **Tutoriel (français) :** [docs/TUTORIAL.fr.md](docs/TUTORIAL.fr.md)
 
-![Screenshot of the simulator](docs/screenshot.png)
 
 ## What you can do
 
