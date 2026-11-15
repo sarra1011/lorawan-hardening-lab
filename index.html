@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoRaWAN Hardening Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a control room. Stack map on top, switches left, attack console right, generated configs below. */
+:root{
+  --bg:#f2f4f7; --panel:#ffffff; --ink:#14202b; --muted:#5a6b7b; --line:#d9e0e7;
+  --accent:#1d5fc4; --accent-ink:#ffffff;
+  --ok:#17794a; --ok-bg:#e1f3ea; --warn:#9a5b00; --warn-bg:#fbefd5; --bad:#b8321d; --bad-bg:#fbe3df;
+  --term-bg:#0f1720; --term-ink:#d6e0ea;
+  --display:'IBM Plex Sans Condensed','IBM Plex Sans',system-ui,sans-serif;
+  --body:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e151d; --panel:#16202b; --ink:#e6edf4; --muted:#93a4b5; --line:#2a3846;
+    --accent:#5b9bf0; --accent-ink:#06111f;
+    --ok:#4cc38a; --ok-bg:#12372a; --warn:#f0b04d; --warn-bg:#3b2d0f; --bad:#ff7b66; --bad-bg:#40201b;
+    --term-bg:#0a0f15; --term-ink:#d6e0ea; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e151d; --panel:#16202b; --ink:#e6edf4; --muted:#93a4b5; --line:#2a3846;
+  --accent:#5b9bf0; --accent-ink:#06111f;
+  --ok:#4cc38a; --ok-bg:#12372a; --warn:#f0b04d; --warn-bg:#3b2d0f; --bad:#ff7b66; --bad-bg:#40201b;
+  --term-bg:#0a0f15; --term-ink:#d6e0ea; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;font-weight:600}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:16px}
+.mono{font-family:var(--mono)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.panel > header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.panel > header h2{font-size:17px}
+.sub{color:var(--muted);font-size:13px}
+
+/* top bar */
+.top{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end}
+.top h1{font-size:30px;line-height:1.1}
+.top p{margin:6px 0 0;color:var(--muted);max-width:62ch}
+.tag{display:inline-block;font:500 12px var(--mono);padding:2px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);margin-right:6px}
+.presets{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--panel);padding:7px 12px;border-radius:8px;font-weight:500;font-size:14px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.small{padding:4px 9px;font-size:13px}
+.btn[disabled]{opacity:.55;cursor:not-allowed}
+.btn[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+
+/* score strip */
+.score{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:0}
+.score .big{padding:16px;border-right:1px solid var(--line)}
+.score .num{font:600 54px/1 var(--display);font-variant-numeric:tabular-nums}
+.score .num small{font-size:20px;color:var(--muted);font-weight:500}
+.verdict{display:inline-block;margin-top:8px;padding:3px 10px;border-radius:999px;font-weight:600;font-size:13px}
+.v-bad{background:var(--bad-bg);color:var(--bad)} .v-warn{background:var(--warn-bg);color:var(--warn)} .v-ok{background:var(--ok-bg);color:var(--ok)}
+.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:12px}
+.bar > i{display:block;height:100%;background:var(--accent);transition:width .35s}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:0}
+.stat{padding:16px;border-right:1px solid var(--line)} .stat:last-child{border-right:0}
+.stat b{display:block;font:600 28px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:13px}
+
+/* map */
+.map{padding:8px 8px 4px;overflow-x:auto}
+.map svg{display:block;width:100%;min-width:640px;height:auto}
+.node rect{stroke-width:1.5;transition:fill .25s,stroke .25s}
+.node.ok rect{fill:var(--ok-bg);stroke:var(--ok)} .node.warn rect{fill:var(--warn-bg);stroke:var(--warn)} .node.bad rect{fill:var(--bad-bg);stroke:var(--bad)} .node.none rect{fill:var(--panel);stroke:var(--line)}
+.node text{fill:var(--ink);font-family:var(--body)} .node .n1{font-weight:600;font-size:13px} .node .n2{font-size:11px;fill:var(--muted)} .node .n3{font:500 11px var(--mono)}
+.node{cursor:pointer} .node:focus-visible rect{stroke:var(--accent);stroke-width:3}
+.link{stroke:var(--muted);stroke-width:1.5;fill:none} .lbl{font:11px var(--mono);fill:var(--muted)}
+.atk-edge{stroke:var(--bad);stroke-width:2;stroke-dasharray:6 5;fill:none;opacity:0}
+.atk-edge.on{opacity:1;animation:dash .6s linear infinite}
+.atk-edge.done-blocked{stroke:var(--ok);opacity:1;animation:none} .atk-edge.done-partial{stroke:var(--warn);opacity:1;animation:none} .atk-edge.done-success{stroke:var(--bad);opacity:1;animation:none}
+@keyframes dash{to{stroke-dashoffset:-22}}
+.legend{display:flex;gap:14px;flex-wrap:wrap;padding:0 16px 12px;color:var(--muted);font-size:12px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+/* main grid */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.grid > *{min-width:0}
+.group{border-top:1px solid var(--line)} .group:first-of-type{border-top:0}
+.group > h3{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:12px 16px 4px;display:flex;justify-content:space-between}
+.ctl{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:8px 16px;align-items:start}
+.ctl.hl{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.sw{width:42px;height:24px;border-radius:999px;border:1px solid var(--line);background:var(--line);position:relative;padding:0;margin-top:2px;transition:background .2s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0004;transition:transform .2s}
+.sw[aria-checked="true"]{background:var(--ok);border-color:var(--ok)} .sw[aria-checked="true"]::after{transform:translateX(18px)}
+.ctl .t{font-weight:500;line-height:1.35}
+.ctl .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:2px;color:var(--muted);font-size:12.5px}
+.id{font:500 12px var(--mono);color:var(--muted)}
+.sev{font-size:11px;font-weight:600;padding:0 6px;border-radius:4px;border:1px solid var(--line)}
+.sev.s5{color:var(--bad);border-color:var(--bad)} .sev.s3{color:var(--warn);border-color:var(--warn)}
+.key{font:12px var(--mono);color:var(--muted)}
+
+/* attacks */
+.atk{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:8px 16px;border-top:1px solid var(--line)}
+.atk:first-child{border-top:0}
+.atk .t{font-weight:500} .atk .d{color:var(--muted);font-size:12.5px}
+.badge{font:600 11px var(--mono);padding:3px 8px;border-radius:5px;letter-spacing:.03em;min-width:78px;text-align:center}
+.b-blocked{background:var(--ok-bg);color:var(--ok)} .b-partial{background:var(--warn-bg);color:var(--warn)} .b-success{background:var(--bad-bg);color:var(--bad)}
+.term{background:var(--term-bg);color:var(--term-ink);border-radius:0 0 10px 10px;font:13px/1.55 var(--mono);height:340px;overflow:auto;padding:12px 16px;white-space:pre-wrap;word-break:break-word}
+.term .atk-l{color:#9cc4ff} .term .srv{color:#d6e0ea} .term .good{color:#6fdca4} .term .bad{color:#ff8a76} .term .note{color:#e8bd6a} .term .hdr{color:#8fa3b6;border-top:1px dashed #2a3846;display:block;margin-top:6px;padding-top:6px}
+.term .res{display:block;margin:4px 0;padding:4px 8px;border-radius:5px;font-weight:500}
+.term .res.blocked{background:#12372a;color:#6fdca4} .term .res.partial{background:#3b2d0f;color:#f0b04d} .term .res.success{background:#40201b;color:#ff8a76}
+.apply{margin:0 16px 12px}
+
+/* wire */
+.wire{font:12.5px/1.5 var(--mono);padding:10px 16px;background:var(--term-bg);color:var(--term-ink);border-radius:0 0 10px 10px;min-height:150px;overflow:hidden}
+.wire div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{font:600 11px var(--mono);padding:3px 8px;border-radius:5px}
+
+/* configs */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0}
+.tab{border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;padding:6px 12px;background:var(--bg);font:500 13px var(--mono)}
+.tab[aria-selected="true"]{background:var(--panel);border-color:var(--accent);color:var(--accent);position:relative}
+.cfg{margin:0;padding:12px 0;background:var(--panel);border-top:1px solid var(--line);font:13px/1.55 var(--mono);overflow-x:auto}
+.cfg span{display:block;padding:0 16px;white-space:pre}
+.cfg span.insec{background:var(--bad-bg);color:var(--bad)}
+.cfg span.sec{background:var(--ok-bg)}
+.cfg span.cm{color:var(--muted)}
+.report{width:100%;min-height:160px;font:12.5px/1.5 var(--mono);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px}
+.foot{color:var(--muted);font-size:12.5px;max-width:90ch}
+.sr{position:absolute;left:-9999px}
+@media (max-width:900px){
+  .grid{grid-template-columns:minmax(0,1fr)} .top{grid-template-columns:minmax(0,1fr)}
+  .score{grid-template-columns:1fr} .score .big{border-right:0;border-bottom:1px solid var(--line)}
+  .stats{grid-template-columns:1fr 1fr 1fr}
+}
+@media (max-width:520px){ .stat b{font-size:22px} .atk{grid-template-columns:1fr auto} .atk .badge{grid-column:1} .top h1{font-size:26px} }
+@media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div>
+      <div><span class="tag">OWASP ISVS 4.6.2</span><span class="tag">ChirpStack v4</span><span class="tag">Mosquitto</span></div>
+      <h1>LoRaWAN Hardening Lab</h1>
+      <p>Switch hardening controls on the network, join and application servers, then fire the attacks yourself. The score, the map, the generated configuration and the attack results all follow your switches.</p>
+    </div>
+    <div class="presets" role="group" aria-label="Presets">
+      <button class="btn" id="p-default" type="button">Default install</button>
+      <button class="btn" id="p-tls" type="button">TLS only</button>
+      <button class="btn" id="p-hard" type="button">Fully hardened</button>
+    </div>
+  </div>
+
+  <section class="panel score" aria-label="Score">
+    <div class="big">
+      <div class="num"><span id="score">0</span><small>/100</small></div>
+      <span class="verdict v-bad" id="verdict">Exposed</span>
+      <div class="bar"><i id="bar" style="width:0%"></i></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="st-ctl">0/22</b><span>controls enabled</span></div>
+      <div class="stat"><b id="st-atk">0/12</b><span>attacks stopped if run now</span></div>
+      <div class="stat"><b id="st-crit">0</b><span>critical controls still off</span></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Stack map">
+    <header><h2>Stack map</h2><span class="sub">Colour shows the weakest control on each server. Click a server to highlight its switches.</span></header>
+    <div class="map">
+      <svg id="svg" viewBox="0 0 850 330" role="img" aria-label="LoRaWAN back-end: sensor, gateway, network server, MQTT broker, application server, join server, database and an attacker">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
+        <!-- links -->
+        <path class="link" d="M150 82H190" marker-end="url(#arr)"/><text class="lbl" x="152" y="72">LoRa</text>
+        <path class="link" d="M320 82H360" marker-end="url(#arr)"/><text class="lbl" x="318" y="72">uplink</text>
+        <path class="link" d="M490 82H530" marker-end="url(#arr)"/><text class="lbl" x="494" y="72">MQTT</text>
+        <path class="link" d="M660 82H700" marker-end="url(#arr)"/><text class="lbl" x="664" y="72">MQTT</text>
+        <path class="link" d="M425 114V190" marker-end="url(#arr)"/><text class="lbl" x="433" y="158">join</text>
+        <path class="link" d="M765 114V190" marker-end="url(#arr)"/><text class="lbl" x="773" y="158">SQL / Redis</text>
+        <!-- attacker edge, redrawn per attack -->
+        <path id="atk-edge" class="atk-edge" d="M0 0"/>
+        <!-- nodes -->
+        <g class="node none" id="n-DEV" tabindex="-1"><rect x="20" y="50" width="130" height="64" rx="8"/><text class="n1" x="85" y="76" text-anchor="middle">End device</text><text class="n2" x="85" y="94" text-anchor="middle">sensor, AppKey</text></g>
+        <g class="node" id="n-GW" tabindex="0" role="button" aria-label="Gateway"><rect x="190" y="50" width="130" height="64" rx="8"/><text class="n1" x="255" y="72" text-anchor="middle">Gateway</text><text class="n2" x="255" y="88" text-anchor="middle">Gateway Bridge</text><text class="n3" x="255" y="104" text-anchor="middle" id="c-GW"></text></g>
+        <g class="node" id="n-NS" tabindex="0" role="button" aria-label="Network server"><rect x="360" y="50" width="130" height="64" rx="8"/><text class="n1" x="425" y="72" text-anchor="middle">Network server</text><text class="n2" x="425" y="88" text-anchor="middle">ChirpStack</text><text class="n3" x="425" y="104" text-anchor="middle" id="c-NS"></text></g>
+        <g class="node" id="n-MQ" tabindex="0" role="button" aria-label="MQTT broker"><rect x="530" y="50" width="130" height="64" rx="8"/><text class="n1" x="595" y="72" text-anchor="middle">MQTT broker</text><text class="n2" x="595" y="88" text-anchor="middle">Mosquitto</text><text class="n3" x="595" y="104" text-anchor="middle" id="c-MQ"></text></g>
+        <g class="node" id="n-AS" tabindex="0" role="button" aria-label="Application server"><rect x="700" y="50" width="130" height="64" rx="8"/><text class="n1" x="765" y="72" text-anchor="middle">Application server</text><text class="n2" x="765" y="88" text-anchor="middle">UI, API, integrations</text><text class="n3" x="765" y="104" text-anchor="middle" id="c-AS"></text></g>
+        <g class="node" id="n-JS" tabindex="0" role="button" aria-label="Join server"><rect x="360" y="190" width="130" height="64" rx="8"/><text class="n1" x="425" y="212" text-anchor="middle">Join server</text><text class="n2" x="425" y="228" text-anchor="middle">AppKey, NwkKey</text><text class="n3" x="425" y="244" text-anchor="middle" id="c-JS"></text></g>
+        <g class="node" id="n-DB" tabindex="0" role="button" aria-label="Database"><rect x="700" y="190" width="130" height="64" rx="8"/><text class="n1" x="765" y="212" text-anchor="middle">PostgreSQL, Redis</text><text class="n2" x="765" y="228" text-anchor="middle">keys, device state</text><text class="n3" x="765" y="244" text-anchor="middle" id="c-DB"></text></g>
+        <g class="node none" id="n-ATK"><rect x="20" y="250" width="130" height="56" rx="8" style="stroke:var(--bad);stroke-dasharray:4 3"/><text class="n1" x="85" y="274" text-anchor="middle">Attacker</text><text class="n2" x="85" y="291" text-anchor="middle">on the LAN</text></g>
+        <circle id="pkt" r="6" fill="var(--accent)" cx="-20" cy="-20"/>
+      </svg>
+    </div>
+    <div class="legend"><span><i style="background:var(--ok)"></i>all controls on</span><span><i style="background:var(--warn)"></i>some off</span><span><i style="background:var(--bad)"></i>a critical control is off</span><span>The moving dot is a real uplink: red when it travels in clear text.</span></div>
+  </section>
+
+  <div class="grid">
+    <section class="panel" aria-label="Hardening controls">
+      <header><h2>Hardening controls</h2><span class="sub">Each switch maps to a line in the generated configuration</span></header>
+      <div id="controls"></div>
+    </section>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <section class="panel" aria-label="Attack console">
+        <header><h2>Attack console</h2><div class="presets"><button class="btn primary small" id="run-all" type="button">Run all 12 attacks</button><button class="btn small" id="clear" type="button">Clear log</button></div></header>
+        <div id="attacks"></div>
+        <div class="term" id="term" role="log" aria-live="polite" tabindex="0"></div>
+      </section>
+      <section class="panel" aria-label="Wire view">
+        <header><h2>What a sniffer sees on the wire</h2><span class="pill" id="wire-state">READABLE</span></header>
+        <div class="wire" id="wire"></div>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel" aria-label="Generated configuration">
+    <header><h2>Generated configuration</h2><span class="sub">Red lines are the settings an attacker is using right now</span></header>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <pre class="cfg" id="cfg"></pre>
+  </section>
+
+  <section class="panel" aria-label="Report">
+    <header><h2>Report for your write-up</h2><div class="presets"><button class="btn small" id="copy" type="button">Copy report</button><span class="sub" id="copy-msg" aria-live="polite"></span></div></header>
+    <div style="padding:12px 16px"><textarea class="report" id="report" readonly aria-label="Report text"></textarea></div>
+  </section>
+
+  <p class="foot">Teaching model: the attack outcomes follow the configuration keys of ChirpStack v4, Gateway Bridge and Mosquitto, and the control IDs match <span class="mono">lorawan_audit.py</span>. Nothing here touches a network. Some controls (NS-02, NS-04, MQ-04) are defence in depth: no single attack here depends on them alone. Use the audit script and the Docker stack to produce the real evidence for your report.</p>
+</div>
+
+<script>
+/*LOGIC-START*/
+const CONTROLS = [
+  {id:'MQ-01',c:'MQ',sev:5,t:'No clear-text MQTT listener (port 1883 closed)',k:'mosquitto.conf: only listener 8883'},
+  {id:'MQ-02',c:'MQ',sev:5,t:'Anonymous MQTT connections refused',k:'allow_anonymous false'},
+  {id:'MQ-03',c:'MQ',sev:3,t:'TLS 1.2 or newer enforced',k:'tls_version tlsv1.2'},
+  {id:'MQ-04',c:'MQ',sev:3,t:'Mutual TLS: clients must present a certificate',k:'require_certificate true'},
+  {id:'MQ-05',c:'MQ',sev:3,t:'Topic ACL with least privilege, no "#" grants',k:'acl_file /mosquitto/config/acl'},
+  {id:'NS-01',c:'NS',sev:5,t:'Gateway backend reaches the broker over TLS',k:'region toml: server = "ssl://mosquitto:8883"'},
+  {id:'NS-02',c:'NS',sev:3,t:'Network server authenticates with a client certificate',k:'region toml: tls_cert, tls_key'},
+  {id:'NS-03',c:'NS',sev:3,t:'Unregistered gateways are rejected',k:'allow_unknown_gateways = false'},
+  {id:'NS-04',c:'NS',sev:1,t:'Only the deployed region is enabled',k:'enabled_regions = ["eu868"]'},
+  {id:'NS-05',c:'NS',sev:2,t:'Metrics endpoint bound to localhost',k:'[monitoring] bind = "127.0.0.1:9100"'},
+  {id:'NS-07',c:'NS',sev:2,t:'Production log level, no payloads in logs',k:'[logging] level = "info"'},
+  {id:'JS-01',c:'JS',sev:3,t:'Built-in join server: root keys never cross the network',k:'[backend_interfaces] disabled'},
+  {id:'JS-02',c:'JS',sev:3,t:'Join replay refused (DevNonce enforced, LoRaWAN 1.0.4+)',k:'device profile: relax frame-counter OFF'},
+  {id:'JS-03',c:'JS',sev:2,t:'Root keys protected at rest (encrypted volume, HSM for production)',k:'LUKS / encrypted backup'},
+  {id:'AS-01',c:'AS',sev:5,t:'Strong API secret supplied from the environment',k:'[api] secret = "${API_SECRET}"'},
+  {id:'AS-02',c:'AS',sev:3,t:'UI and API only through an HTTPS reverse proxy with HSTS',k:'nginx: listen 443 ssl, HSTS'},
+  {id:'AS-03',c:'AS',sev:5,t:'Default admin/admin replaced, MFA or SSO enabled',k:'first login + OpenID Connect'},
+  {id:'AS-04',c:'AS',sev:3,t:'Application integration uses MQTT over TLS with a client certificate',k:'[integration.mqtt] server = "ssl://..."'},
+  {id:'AS-05',c:'AS',sev:2,t:'PostgreSQL connection verified and encrypted',k:'dsn ...?sslmode=verify-full'},
+  {id:'AS-06',c:'AS',sev:3,t:'Database and Redis not published, strong passwords',k:'no "ports:" on postgres and redis'},
+  {id:'GW-01',c:'GW',sev:3,t:'Gateways authenticate with Basics Station mutual TLS',k:'gateway-bridge: backend basic_station + client certs'},
+  {id:'GW-02',c:'GW',sev:2,t:'Semtech UDP port 1700 not exposed',k:'bind = "127.0.0.1:1700"'}
+];
+const TOTAL_W = CONTROLS.reduce((a,c)=>a+c.sev,0);
+const COMP = {
+  GW:{name:'Gateway link'}, NS:{name:'Network server'}, JS:{name:'Join server'},
+  AS:{name:'Application server'}, MQ:{name:'MQTT broker'}
+};
+const NODE_CTL = {
+  GW:['GW-01','GW-02'], NS:['NS-01','NS-02','NS-03','NS-04','NS-05','NS-07'], JS:['JS-01','JS-02','JS-03'],
+  MQ:['MQ-01','MQ-02','MQ-03','MQ-04','MQ-05'], AS:['AS-01','AS-02','AS-03','AS-04'], DB:['AS-05','AS-06']
+};
+function allState(v){ const s={}; CONTROLS.forEach(c=>s[c.id]=v); return s; }
+function presetState(name){
+  if(name==='hard') return allState(true);
+  const s = allState(false);
+  if(name==='tls'){ ['MQ-01','MQ-03','NS-01','AS-04','AS-02'].forEach(i=>s[i]=true); }
+  return s;
+}
+function score(s){ let got=0; CONTROLS.forEach(c=>{ if(s[c.id]) got+=c.sev; }); return Math.round(100*got/TOTAL_W); }
+function verdict(n){ return n>=100?['Hardened','v-ok']: n>=80?['Good','v-ok']: n>=50?['Weak','v-warn']:['Exposed','v-bad']; }
+function nodeStatus(s,node){
+  const ids = NODE_CTL[node]; const off = ids.filter(i=>!s[i]);
+  if(!off.length) return 'ok';
+  return off.some(i=>CONTROLS.find(c=>c.id===i).sev>=5) ? 'bad' : 'warn';
+}
+
+const ATTACKS = [
+ {id:'A1',name:'Sniff MQTT traffic',desc:'tcpdump on the broker network',target:'MQ',fix:['MQ-01','NS-01','AS-04'],
+  run(s){
+    const leaks=[]; if(!s['MQ-01']) leaks.push('broker still listens on clear-text 1883');
+    if(!s['NS-01']) leaks.push('network server connects with tcp://'); if(!s['AS-04']) leaks.push('application integration connects with tcp://');
+    const L=[['atk','$ sudo tcpdump -i eth0 -A "port 1883 or port 8883"']];
+    if(leaks.length){
+      L.push(['srv','PUBLISH application/7f3c/device/70b3d57ed005a1c4/event/up']);
+      L.push(['bad','{"devEui":"70b3d57ed005a1c4","fPort":10,"object":{"temperature":23.4,"battery":3.61}}']);
+      leaks.forEach(x=>L.push(['note','leak path: '+x]));
+      return {status:'success',impact:'Device identifiers and sensor data are readable by anyone on the network.',lines:L};
+    }
+    L.push(['srv','TLS 1.3 Application Data  17 03 03 00 5a 8c e1 04 f9 2b 77 …']);
+    L.push(['good','Only encrypted records are visible.']);
+    return {status:'blocked',impact:'Traffic is encrypted end to end between the servers.',lines:L};
+  }},
+ {id:'A2',name:'Anonymous subscribe to "#"',desc:'mosquitto_sub with no credentials',target:'MQ',fix:['MQ-02','MQ-05','MQ-04'],
+  run(s){
+    const p = s['MQ-01']?8883:1883;
+    const L=[['atk',`$ mosquitto_sub -h broker -p ${p} -t '#' -v${p===8883?' --insecure':''}`]];
+    if(s['MQ-04']){ L.push(['srv','TLS alert: certificate required (handshake failure)']); return {status:'blocked',impact:'The broker drops clients that have no certificate before MQTT starts.',lines:L}; }
+    if(s['MQ-02']){ L.push(['srv','CONNACK return code 5: not authorised']); return {status:'blocked',impact:'Anonymous clients are refused.',lines:L}; }
+    L.push(['srv','CONNACK return code 0: accepted']);
+    if(s['MQ-05']){ L.push(['srv','SUBACK 0x80: subscription refused by ACL']); L.push(['note','connection accepted: an anonymous client can still exhaust broker resources']); return {status:'partial',impact:'No data leaks, but anonymous connections are still allowed.',lines:L}; }
+    L.push(['bad','gateway/0102030405060708/event/up {"phyPayload":"QAQDAgEA…"}']);
+    L.push(['bad','application/7f3c/device/70b3d57ed005a1c4/command/down {"data":"AQ=="}']);
+    return {status:'success',impact:'Full read access to every uplink and downlink, with the ability to publish commands.',lines:L};
+  }},
+ {id:'A3',name:'Log in with admin/admin',desc:'default ChirpStack account',target:'AS',fix:['AS-03'],
+  run(s){
+    const sch = s['AS-02']?'https':'http', k = s['AS-02']?' -k':'';
+    const L=[['atk',`$ curl -s${k} -X POST ${sch}://chirpstack/api/internal/login -d '{"email":"admin","password":"admin"}'`]];
+    if(!s['AS-03']){ L.push(['bad','HTTP 200 {"jwt":"eyJhbGciOiJIUzI1NiIs…"}']); L.push(['bad','global admin: can read AppKeys, add gateways, create API keys']); return {status:'success',impact:'Full control of the application server.',lines:L}; }
+    L.push(['srv','HTTP 401 invalid username or password']); return {status:'blocked',impact:'Default credentials no longer work.',lines:L};
+  }},
+ {id:'A4',name:'Capture web credentials',desc:'passive sniffing of the UI login',target:'AS',fix:['AS-02'],
+  run(s){
+    const L=[['atk','$ sudo tcpdump -A "tcp port 80 or tcp port 443" | grep -i password']];
+    if(!s['AS-02']){ L.push(['bad','POST /api/internal/login  {"email":"ops@lab.tn","password":"S3cret!"}']); return {status:'success',impact:'Administrator passwords and JWTs cross the network in clear text.',lines:L}; }
+    L.push(['srv','TLS handshake only. sslstrip: HSTS forces https, downgrade refused']); L.push(['good','No readable credentials.']); return {status:'blocked',impact:'The UI is only served over HTTPS with HSTS.',lines:L};
+  }},
+ {id:'A5',name:'Forge an API token',desc:'default JWT signing secret',target:'AS',fix:['AS-01'],
+  run(s){
+    const L=[['atk','$ python3 forge_jwt.py --secret you-must-replace-this --sub admin']];
+    if(!s['AS-01']){ L.push(['srv','token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.…']); L.push(['bad','GET /api/users with forged token: HTTP 200']); return {status:'success',impact:'Anyone who knows the public default secret can mint admin tokens.',lines:L}; }
+    L.push(['srv','GET /api/users with forged token: HTTP 401 signature verification failed']); return {status:'blocked',impact:'The secret is long, random and supplied from the environment.',lines:L};
+  }},
+ {id:'A6',name:'Rogue gateway injection',desc:'fake packet forwarder',target:'GW',fix:['GW-01','GW-02','NS-03','MQ-02','MQ-05'],
+  run(s){
+    const L=[['atk','$ python3 fake_gw.py --eui 0102030405060708 --uplinks 50']];
+    if(!s['GW-01'] || !s['GW-02']){
+      L.push(['srv', !s['GW-02'] ? 'PUSH_DATA accepted on udp/1700 (no authentication in the Semtech protocol)' : 'gateway websocket accepted without a client certificate']);
+      if(!s['NS-03']){ L.push(['bad','network server: gateway 0102030405060708 not registered, accepted (allow_unknown_gateways = true)']); return {status:'success',impact:'Any device can register as a gateway and feed forged uplinks and fake locations.',lines:L}; }
+      L.push(['note','unknown EUI rejected, retry with a registered EUI read from a sniffed packet']); L.push(['bad','spoofed gateway accepted']);
+      return {status:'partial',impact:'Registering gateways helps, but an unauthenticated link still allows EUI spoofing.',lines:L};
+    }
+    if(!s['MQ-02'] || !s['MQ-05']){
+      L.push(['srv','link authenticated, so the attacker publishes straight to the broker']);
+      L.push(['bad','PUBLISH gateway/0102030405060708/event/up accepted (anonymous or no ACL)']); return {status:'success',impact:'Forged uplinks reach the network server through the broker.',lines:L};
+    }
+    L.push(['srv','TLS alert: bad certificate (client certificate required)']); L.push(['good','No path for a rogue gateway.']);
+    return {status:'blocked',impact:'Gateways must prove their identity with a certificate.',lines:L};
+  }},
+ {id:'A7',name:'TLS downgrade',desc:'force an old protocol version',target:'MQ',fix:['MQ-01','MQ-03'],
+  run(s){
+    if(!s['MQ-01']) return {status:'success',impact:'No TLS to attack: the listener is already clear text.',lines:[['atk','$ openssl s_client -connect broker:1883'],['bad','connected, no handshake needed: plain MQTT']]};
+    const L=[['atk','$ openssl s_client -connect broker:8883 -tls1']];
+    if(!s['MQ-03']){ L.push(['bad','Protocol: TLSv1   Cipher: AES128-SHA']); return {status:'success',impact:'Legacy TLS with weak ciphers is accepted.',lines:L}; }
+    L.push(['srv','alert protocol_version (70)']); return {status:'blocked',impact:'The broker only accepts TLS 1.2 and above.',lines:L};
+  }},
+ {id:'A8',name:'Replay a JoinRequest',desc:'reuse a captured DevNonce',target:'JS',fix:['JS-02'],
+  run(s){
+    const L=[['atk','$ python3 replay_join.py --capture join_request.bin   # DevNonce 0x0021 already used']];
+    if(!s['JS-02']){ L.push(['bad','JoinRequest DevNonce=0x0021 accepted (relaxed counter check)']); L.push(['bad','new session keys derived: the real device is now out of sync']); return {status:'success',impact:'Session hijack or denial of service against a device.',lines:L}; }
+    L.push(['srv','DevNonce 0x0021 already used: join rejected']); return {status:'blocked',impact:'Replayed joins are refused.',lines:L};
+  }},
+ {id:'A9',name:'Root keys over an external join server',desc:'sniff the Backend Interfaces API',target:'JS',fix:['JS-01'],
+  run(s){
+    const L=[['atk','$ sudo tcpdump -A "tcp port 8070"']];
+    if(!s['JS-01']){ L.push(['bad','POST /  JoinAnsPayload {"AppSKey":{"KEKLabel":"","AESKey":"2b7e1516…"}}']); return {status:'success',impact:'Session key material travels over plain HTTP to an external join server.',lines:L}; }
+    L.push(['srv','no traffic: the join server is built in and AppKey and NwkKey stay in PostgreSQL']); return {status:'blocked',impact:'Root keys never leave the database host.',lines:L};
+  }},
+ {id:'A10',name:'Connect to PostgreSQL and Redis',desc:'direct database access',target:'DB',fix:['AS-06','AS-05'],
+  run(s){
+    const L=[['atk',"$ PGPASSWORD=chirpstack psql -h postgres -U chirpstack -c \"SELECT encode(app_key,'hex') FROM device_keys LIMIT 1\""]];
+    if(!s['AS-06']){ L.push(['bad','a1b2c3d4e5f60718293a4b5c6d7e8f90']); L.push(['atk','$ redis-cli -h redis KEYS "device:*"']); L.push(['bad','1) "device:70b3d57ed005a1c4:session"']); return {status:'success',impact:'Root keys and session state read straight from the database.',lines:L}; }
+    L.push(['srv','connection refused / password authentication failed']);
+    if(!s['AS-05']){ L.push(['note','reachable only inside the Docker network, but sslmode=disable lets a compromised container sniff queries']); return {status:'partial',impact:'Not reachable from outside, but the internal link is unencrypted.',lines:L}; }
+    return {status:'blocked',impact:'Database is private, authenticated and verified.',lines:L};
+  }},
+ {id:'A11',name:'Scrape metrics and debug logs',desc:'information disclosure',target:'NS',fix:['NS-05','NS-07'],
+  run(s){
+    const L=[['atk','$ curl -s http://chirpstack:9100/metrics | head'],]; let n=0;
+    if(!s['NS-05']){ L.push(['bad','chirpstack_gateway_uplink_count{gateway_id="0102030405060708"} 8421']); n++; } else L.push(['srv','curl: connection refused (bound to 127.0.0.1)']);
+    L.push(['atk','$ docker logs chirpstack | grep -i payload']);
+    if(!s['NS-07']){ L.push(['bad','DEBUG uplink payload="23.4C" dev_eui=70b3d57ed005a1c4 nwk_s_key=…']); n++; } else L.push(['srv','(no matching lines at log level info)']);
+    return n===2?{status:'success',impact:'Topology, device counts and payloads leak through monitoring and logs.',lines:L}
+         : n===1?{status:'partial',impact:'One information leak remains.',lines:L}
+         : {status:'blocked',impact:'No metrics exposure, no payloads in logs.',lines:L};
+  }},
+ {id:'A12',name:'Steal a database backup',desc:'read keys from a disk image',target:'DB',fix:['JS-03'],
+  run(s){
+    const L=[['atk','$ tar xzf pg_backup_2026-11-14.tar.gz && strings base/*/16384 | grep -i app_key']];
+    if(!s['JS-03']){ L.push(['bad','app_key = a1b2c3d4e5f60718293a4b5c6d7e8f90']); return {status:'success',impact:'Anyone with the backup owns every device.',lines:L}; }
+    L.push(['srv','binary ciphertext only (encrypted volume, wrapped keys)']); return {status:'blocked',impact:'Stolen media does not reveal the root keys.',lines:L};
+  }}
+];
+function evalAll(s){ return ATTACKS.map(a=>({a, r:a.run(s)})); }
+
+function genConfig(s){
+  const bad=(t)=>t+'   # INSECURE', cm=(t)=>'# '+t;
+  const cs=[
+    '[logging]', s['NS-07']?'level="info"':bad('level="debug"'), '',
+    '[postgresql]',
+    'dsn="postgres://chirpstack:'+(s['AS-06']?'${POSTGRES_PASSWORD}':'chirpstack')+'@postgres/chirpstack?sslmode='+(s['AS-05']?'verify-full"':'disable"')+((s['AS-06']&&s['AS-05'])?'':'   # INSECURE'), '',
+    '[redis]', s['AS-06']?'servers=["redis://:${REDIS_PASSWORD}@redis/"]':bad('servers=["redis://redis/"]'), '',
+    '[network]','net_id="000000"',
+    s['NS-04']?'enabled_regions=["eu868"]':bad('enabled_regions=["eu868","us915","as923","au915","kr920","in865"]'), '',
+    '[gateway]', s['NS-03']?'allow_unknown_gateways=false':bad('allow_unknown_gateways=true'), '',
+    '[api]','bind="127.0.0.1:8080"', s['AS-01']?'secret="${API_SECRET}"':bad('secret="you-must-replace-this"'), '',
+    '[monitoring]', s['NS-05']?'bind="127.0.0.1:9100"':bad('bind="0.0.0.0:9100"'), '',
+    '[backend_interfaces]', s['JS-01']?cm('disabled: built-in join server, keys stay in PostgreSQL'):bad('bind="0.0.0.0:8070"   # external join server over plain HTTP'), '',
+    '[integration]','enabled=["mqtt"]','  [integration.mqtt]',
+    '  server="'+(s['AS-04']?'ssl://mosquitto:8883/':'tcp://mosquitto:1883/')+'"'+(s['AS-04']?'':'   # INSECURE'),
+    s['AS-04']?'  ca_cert="/certs/ca.crt"\n  tls_cert="/certs/chirpstack-app.crt"\n  tls_key="/certs/chirpstack-app.key"':''
+  ];
+  const region=[
+    '[[regions]]','id="eu868"','',
+    '  [regions.gateway.backend.mqtt]',
+    '  server="'+(s['NS-01']?'ssl://mosquitto:8883':'tcp://mosquitto:1883')+'"'+(s['NS-01']?'':'   # INSECURE'),
+    s['NS-02']?'  ca_cert="/certs/ca.crt"\n  tls_cert="/certs/chirpstack-ns.crt"\n  tls_key="/certs/chirpstack-ns.key"':bad('  # no client certificate, no username: relies on the broker accepting anyone'),
+    '', cm('Device profile (UI): LoRaWAN MAC 1.0.4'), s['JS-02']?cm('Relax frame-counter: OFF'):bad('Relax frame-counter: ON   -> DevNonce reuse accepted')
+  ];
+  const moq=[];
+  moq.push('persistence false','allow_anonymous '+(s['MQ-02']?'false':'true')+(s['MQ-02']?'':'   # INSECURE'),'');
+  if(!s['MQ-01']) moq.push('listener 1883   # INSECURE: clear text','');
+  moq.push('listener 8883','cafile /mosquitto/certs/ca.crt','certfile /mosquitto/certs/broker.crt','keyfile /mosquitto/certs/broker.key');
+  moq.push(s['MQ-03']?'tls_version tlsv1.2':'# tls_version not set: TLS 1.0 and 1.1 still accepted   # INSECURE');
+  moq.push(s['MQ-04']?'require_certificate true\nuse_identity_as_username true':'require_certificate false   # INSECURE');
+  moq.push(s['MQ-05']?'acl_file /mosquitto/config/acl':'# no acl_file: every client can read and write "#"   # INSECURE');
+  const gw=[];
+  if(s['GW-01']){ gw.push('[backend]','type="basic_station"','  [backend.basic_station]','  bind="0.0.0.0:3001"','  tls_cert="/certs/bridge.crt"','  tls_key="/certs/bridge.key"','  ca_cert="/certs/ca.crt"   # clients must present a certificate'); }
+  else { gw.push('[backend]','type="semtech_udp"','  [backend.semtech_udp]','  udp_bind="'+(s['GW-02']?'127.0.0.1:1700"':'0.0.0.0:1700"   # INSECURE: unauthenticated UDP')); }
+  gw.push('','[integration.mqtt.auth.generic]','servers=["'+(s['NS-01']?'ssl://mosquitto:8883':'tcp://mosquitto:1883')+'"]');
+  return {
+    'chirpstack.toml':cs.join('\n'),
+    'region_eu868.toml':region.join('\n'),
+    'mosquitto.conf':moq.join('\n'),
+    'gateway-bridge.toml':gw.join('\n')
+  };
+}
+function reportText(s){
+  const sc=score(s), res=evalAll(s), stopped=res.filter(x=>x.r.status==='blocked').length;
+  let t='LoRaWAN hardening lab - OWASP ISVS 4.6.2\n';
+  t+=`Score: ${sc}/100 (${verdict(sc)[0]}), controls enabled ${CONTROLS.filter(c=>s[c.id]).length}/${CONTROLS.length}, attacks stopped ${stopped}/${ATTACKS.length}\n\n`;
+  t+='| ID | Server | Control | Status |\n|---|---|---|---|\n';
+  CONTROLS.forEach(c=>{ t+=`| ${c.id} | ${COMP[c.c].name} | ${c.t} | ${s[c.id]?'ON':'OFF'} |\n`; });
+  t+='\n| Attack | Result | Impact |\n|---|---|---|\n';
+  res.forEach(x=>{ t+=`| ${x.a.name} | ${x.r.status.toUpperCase()} | ${x.r.impact} |\n`; });
+  return t;
+}
+/*LOGIC-END*/
+
+/* ---------- UI ---------- */
+const $ = (id)=>document.getElementById(id);
+const state = presetState('default');
+let busy=false, filterComp=null, cfgTab='chirpstack.toml';
+const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sleep = (ms)=>new Promise(r=>setTimeout(r, reduce?0:ms));
+
+function buildControls(){
+  const host=$('controls'); host.innerHTML='';
+  ['MQ','NS','JS','AS','GW'].forEach(comp=>{
+    const g=document.createElement('div'); g.className='group'; g.dataset.comp=comp;
+    const list=CONTROLS.filter(c=>c.c===comp);
+    const h=document.createElement('h3'); h.innerHTML=`<span>${COMP[comp].name}</span><span id="gc-${comp}"></span>`; g.appendChild(h);
+    list.forEach(c=>{
+      const row=document.createElement('div'); row.className='ctl'; row.id='row-'+c.id;
+      const sw=document.createElement('button'); sw.type='button'; sw.className='sw'; sw.id='sw-'+c.id;
+      sw.setAttribute('role','switch'); sw.setAttribute('aria-label',c.id+' '+c.t);
+      sw.addEventListener('click',()=>{ state[c.id]=!state[c.id]; refresh(); });
+      const body=document.createElement('div');
+      const sevCls = c.sev>=5?'s5':c.sev>=3?'s3':'';
+      body.innerHTML=`<div class="t">${c.t}</div><div class="meta"><span class="id">${c.id}</span><span class="sev ${sevCls}">${c.sev>=5?'Critical':c.sev>=3?'High':c.sev>=2?'Medium':'Low'}</span><span class="key">${c.k}</span></div>`;
+      row.appendChild(sw); row.appendChild(body); g.appendChild(row);
+    });
+    host.appendChild(g);
+  });
+}
+function buildAttacks(){
+  const host=$('attacks'); host.innerHTML='';
+  ATTACKS.forEach(a=>{
+    const row=document.createElement('div'); row.className='atk';
+    row.innerHTML=`<div><div class="t">${a.id} ${a.name}</div><div class="d">${a.desc}</div></div><span class="badge" id="bd-${a.id}"></span>`;
+    const b=document.createElement('button'); b.type='button'; b.className='btn small'; b.textContent='Run'; b.id='run-'+a.id;
+    b.addEventListener('click',()=>runAttack(a)); row.appendChild(b); host.appendChild(row);
+  });
+}
+function buildTabs(){
+  const host=$('tabs'); host.innerHTML='';
+  ['chirpstack.toml','region_eu868.toml','mosquitto.conf','gateway-bridge.toml'].forEach(n=>{
+    const b=document.createElement('button'); b.type='button'; b.className='tab'; b.setAttribute('role','tab'); b.textContent=n; b.dataset.n=n;
+    b.addEventListener('click',()=>{ cfgTab=n; renderCfg(); }); host.appendChild(b);
+  });
+}
+function renderCfg(){
+  const txt=genConfig(state)[cfgTab]; const pre=$('cfg'); pre.innerHTML='';
+  txt.split('\n').forEach(line=>{
+    const s=document.createElement('span');
+    if(/INSECURE/.test(line)) s.className='insec'; else if(/^\s*#/.test(line)) s.className='cm';
+    s.textContent=line===''?' ':line; pre.appendChild(s);
+  });
+  document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected', String(t.dataset.n===cfgTab)));
+}
+function refresh(){
+  const sc=score(state), v=verdict(sc), res=evalAll(state);
+  $('score').textContent=sc; $('bar').style.width=sc+'%';
+  const ve=$('verdict'); ve.textContent=v[0]; ve.className='verdict '+v[1];
+  const on=CONTROLS.filter(c=>state[c.id]).length;
+  $('st-ctl').textContent=on+'/'+CONTROLS.length;
+  $('st-atk').textContent=res.filter(x=>x.r.status==='blocked').length+'/'+ATTACKS.length;
+  $('st-crit').textContent=CONTROLS.filter(c=>c.sev>=5 && !state[c.id]).length;
+  CONTROLS.forEach(c=>{ $('sw-'+c.id).setAttribute('aria-checked', String(!!state[c.id])); });
+  Object.keys(COMP).forEach(k=>{ const l=CONTROLS.filter(c=>c.c===k); $('gc-'+k).textContent=l.filter(c=>state[c.id]).length+'/'+l.length; });
+  ['GW','NS','JS','MQ','AS','DB'].forEach(n=>{
+    const g=$('n-'+n); g.setAttribute('class','node '+nodeStatus(state,n));
+    const ids=NODE_CTL[n]; $('c-'+n).textContent=ids.filter(i=>state[i]).length+'/'+ids.length+' controls';
+  });
+  res.forEach(x=>{ const b=$('bd-'+x.a.id); b.textContent={blocked:'BLOCKED',partial:'PARTIAL',success:'BREACH'}[x.r.status]; b.className='badge b-'+x.r.status; });
+  document.querySelectorAll('.ctl').forEach(r=>{
+    const id=r.id.slice(4), comp=filterComp, ids=comp?NODE_CTL[comp]:[];
+    r.classList.toggle('hl', ids.includes(id));
+  });
+  renderCfg(); $('report').value=reportText(state); updateWireHeader();
+}
+
+/* terminal */
+function termLine(kind,text){
+  const d=document.createElement('span'); d.className=kind==='atk'?'atk-l':kind; d.style.display='block';
+  d.textContent=(kind==='atk'?'':kind==='srv'?'  ':kind==='good'?'  [ok] ':kind==='bad'?'  [!!] ':'  [..] ')+text;
+  $('term').appendChild(d); $('term').scrollTop=$('term').scrollHeight;
+}
+function termHeader(text){ const d=document.createElement('span'); d.className='hdr'; d.textContent=text; $('term').appendChild(d); }
+function edge(a){
+  const to={GW:[255,82],NS:[425,82],MQ:[595,82],AS:[765,82],JS:[425,222],DB:[765,222]}[a.target];
+  const e=$('atk-edge'); e.setAttribute('d',`M150 278 C ${to[0]-60} 300, ${to[0]-60} ${to[1]+60}, ${to[0]} ${to[1]+32}`);
+  return e;
+}
+async function runAttack(a, quiet){
+  const snap={...state}; const r=a.run(snap); const e=edge(a);
+  e.setAttribute('class','atk-edge on');
+  termHeader(a.id+'  '+a.name);
+  for(const [k,t] of r.lines){ termLine(k,t); await sleep(260); }
+  const d=document.createElement('span'); d.className='res '+r.status;
+  d.textContent={blocked:'BLOCKED: ',partial:'PARTIAL: ',success:'BREACH: '}[r.status]+r.impact;
+  $('term').appendChild(d); $('term').scrollTop=$('term').scrollHeight;
+  e.setAttribute('class','atk-edge done-'+r.status);
+  if(r.status!=='blocked' && !quiet){ addFix(a); }
+  await sleep(300);
+  return r;
+}
+function addFix(a){
+  const b=document.createElement('button'); b.type='button'; b.className='btn small apply'; b.style.display='block'; b.textContent='Apply the fix ('+a.fix.join(', ')+') and re-run';
+  b.addEventListener('click',async()=>{ if(busy) return; a.fix.forEach(i=>state[i]=true); refresh(); b.remove(); await runWith(()=>runAttack(a,true)); });
+  $('term').appendChild(b); $('term').scrollTop=$('term').scrollHeight;
+}
+async function runWith(fn){
+  if(busy) return; busy=true; setBusy(true);
+  try{ await fn(); } finally{ busy=false; setBusy(false); }
+}
+function setBusy(v){ document.querySelectorAll('.atk .btn, #run-all').forEach(b=>b.disabled=v); }
+$('run-all').addEventListener('click',()=>runWith(async()=>{
+  const out=[]; for(const a of ATTACKS){ out.push((await runAttack(a,true)).status); }
+  const n=out.filter(x=>x==='blocked').length; termHeader('Summary');
+  termLine(n===out.length?'good':'bad', `${n} of ${out.length} attacks stopped, ${out.filter(x=>x==='success').length} breaches, ${out.filter(x=>x==='partial').length} partial`);
+}));
+$('clear').addEventListener('click',()=>{ $('term').innerHTML=''; $('atk-edge').setAttribute('class','atk-edge'); });
+
+/* presets */
+function setPreset(n){ Object.assign(state,presetState(n)); refresh(); }
+$('p-default').addEventListener('click',()=>setPreset('default'));
+$('p-tls').addEventListener('click',()=>setPreset('tls'));
+$('p-hard').addEventListener('click',()=>setPreset('hard'));
+
+/* node click highlight */
+['GW','NS','JS','MQ','AS','DB'].forEach(n=>{
+  const g=$('n-'+n);
+  const go=()=>{ filterComp = filterComp===n?null:n; refresh(); if(filterComp){ const first=NODE_CTL[n][0]; const row=$('row-'+first); if(row) row.scrollIntoView({block:'nearest',behavior:reduce?'auto':'smooth'}); } };
+  g.addEventListener('click',go); g.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } });
+});
+
+/* wire view + moving packet */
+let seq=0;
+const hex=(n)=>Array.from({length:n},()=>Math.floor(Math.random()*256).toString(16).padStart(2,'0')).join(' ');
+function clearPath(){ return !(state['MQ-01'] && state['NS-01'] && state['AS-04']); }
+function updateWireHeader(){
+  const p=$('wire-state'), c=clearPath();
+  p.textContent=c?'READABLE':'ENCRYPTED'; p.className='pill '+(c?'b-success':'b-blocked');
+}
+function wireTick(){
+  const w=$('wire'); seq++; const t=new Date().toLocaleTimeString([], {hour12:false});
+  const d=document.createElement('div');
+  if(clearPath()){ const temp=(22+Math.random()*3).toFixed(1); d.style.color='#ff8a76'; d.textContent=`${t}  1883  {"devEui":"70b3d57ed005a1c4","fCnt":${seq},"object":{"temperature":${temp}}}`; }
+  else { d.style.color='#6fdca4'; d.textContent=`${t}  8883  17 03 03 00 5a ${hex(9)} …`; }
+  w.appendChild(d); while(w.children.length>7) w.removeChild(w.firstChild);
+  flyPacket();
+}
+const PATH=[[85,82],[255,82],[425,82],[595,82],[765,82]];
+function flyPacket(){
+  const dot=$('pkt'); if(reduce){ return; }
+  dot.setAttribute('fill', clearPath()?'var(--bad)':'var(--accent)');
+  const total=PATH.length-1, dur=1400, t0=performance.now();
+  (function step(now){
+    const p=Math.max(0,Math.min(1,(now-t0)/dur))*total, i=Math.min(total-1,Math.floor(p)), f=p-i;
+    dot.setAttribute('cx', PATH[i][0]+(PATH[i+1][0]-PATH[i][0])*f); dot.setAttribute('cy', PATH[i][1]);
+    if(p<total) requestAnimationFrame(step); else { dot.setAttribute('cx',-20); }
+  })(t0);
+}
+
+/* report copy */
+$('copy').addEventListener('click',async()=>{
+  const ta=$('report'); const msg=$('copy-msg');
+  try{ await navigator.clipboard.writeText(ta.value); msg.textContent='Copied.'; }
+  catch(e){ ta.focus(); ta.select(); msg.textContent='Select all and copy (Ctrl+C).'; }
+});
+
+buildControls(); buildAttacks(); buildTabs(); refresh(); wireTick();
+setInterval(wireTick, 2600);
+</script>
+</body>
+</html>

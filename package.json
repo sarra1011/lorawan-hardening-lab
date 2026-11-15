@@ -1,0 +1,15 @@
+{
+  "name": "lorawan-hardening-lab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive OWASP ISVS 4.6.2 hardening simulator for a ChirpStack LoRaWAN back-end",
+  "scripts": {
+    "test:logic": "node tests/logic.test.js",
+    "test:smoke": "node tests/smoke.test.mjs",
+    "test": "npm run test:logic && npm run test:smoke",
+    "serve": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "playwright": "1.49.1"
+  }
+}
